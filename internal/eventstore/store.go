@@ -38,25 +38,23 @@ func Open(directory string) (*Store, error) {
 		return nil, fmt.Errorf("创建数据目录: %w", err)
 	}
 	s := &Store{directory: directory, ledgerPath: filepath.Join(directory, "events.jsonl"), snapshotPath: filepath.Join(directory, "projection.json"), cases: map[string]*domain.SuitabilityCase{}, caseNumbers: map[string]string{}, lotCases: map[string][]string{}, credentials: map[string]domain.ReleaseCredential{}, idempotency: map[string]IdempotencyRecord{}}
-	if err := s.validateSnapshotSchema(); err != nil {
+	if err := s.loadSnapshot(); err != nil {
 		return nil, err
 	}
 	if err := s.replay(); err != nil {
 		return nil, err
 	}
-	ledgerFile, err := os.OpenFile(s.ledgerPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
-	if err != nil {
-		return nil, fmt.Errorf("打开事件账本: %w", err)
+	if err := s.ensureLedgerHandle(); err != nil {
+		return nil, err
 	}
-	s.ledgerFile = ledgerFile
 	if err := s.writeSnapshotLocked(); err != nil {
-		_ = ledgerFile.Close()
+		_ = s.ledgerFile.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) validateSnapshotSchema() error {
+func (s *Store) loadSnapshot() error {
 	f, err := os.Open(s.snapshotPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -82,6 +80,40 @@ func (s *Store) validateSnapshotSchema() error {
 	if calculated != snapshot.ProjectionHash {
 		return errors.New("投影快照内容哈希不匹配")
 	}
+	s.sequence = snapshot.LastSequence
+	s.lastHash = snapshot.LastHash
+	for id, c := range snapshot.Cases {
+		copyCase, err := cloneJSON(c)
+		if err != nil {
+			return err
+		}
+		s.cases[id] = copyCase
+	}
+	for k, cred := range snapshot.Credentials {
+		s.credentials[k] = cred
+	}
+	for k, rec := range snapshot.Idempotency {
+		s.idempotency[k] = rec
+	}
+	s.rebuildIndexes()
+	return nil
+}
+
+func (s *Store) ensureLedgerHandle() error {
+	if s.ledgerFile != nil {
+		if handleStat, err := s.ledgerFile.Stat(); err == nil {
+			if pathStat, err := os.Stat(s.ledgerPath); err == nil && os.SameFile(handleStat, pathStat) {
+				return nil
+			}
+		}
+		_ = s.ledgerFile.Close()
+		s.ledgerFile = nil
+	}
+	f, err := os.OpenFile(s.ledgerPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
+	if err != nil {
+		return fmt.Errorf("打开事件账本: %w", err)
+	}
+	s.ledgerFile = f
 	return nil
 }
 
@@ -102,6 +134,19 @@ func (s *Store) replay() error {
 		var event Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			return fmt.Errorf("事件账本第 %d 行无效: %w", line, err)
+		}
+		if event.Sequence <= s.sequence {
+			if event.Sequence != 1 && event.PreviousHash == "" {
+				return fmt.Errorf("事件账本第 %d 行: 前序哈希为空", line)
+			}
+			hash, err := calculateHash(event)
+			if err != nil {
+				return fmt.Errorf("事件账本第 %d 行: %w", line, err)
+			}
+			if hash != event.Hash {
+				return fmt.Errorf("事件账本第 %d 行: 事件校验哈希不匹配", line)
+			}
+			continue
 		}
 		if err := s.validateNextEvent(event); err != nil {
 			return fmt.Errorf("事件账本第 %d 行: %w", line, err)
@@ -216,6 +261,9 @@ func (s *Store) Commit(request CommitRequest) error {
 	line, err := json.Marshal(event)
 	if err != nil {
 		return err
+	}
+	if err := s.ensureLedgerHandle(); err != nil {
+		return fmt.Errorf("重开事件账本: %w", err)
 	}
 	if _, err = s.ledgerFile.Write(append(line, '\n')); err == nil {
 		err = s.ledgerFile.Sync()
