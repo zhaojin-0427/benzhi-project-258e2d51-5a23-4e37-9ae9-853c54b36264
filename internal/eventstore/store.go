@@ -144,7 +144,11 @@ func (s *Store) applyEvent(event Event) error {
 	}
 	s.cases[c.CaseID] = copyCase
 	if event.Credential != nil {
-		s.credentials[event.Credential.CredentialNumber] = *event.Credential
+		stored, err := cloneJSON(*event.Credential)
+		if err != nil {
+			return err
+		}
+		s.credentials[event.Credential.CredentialNumber] = stored
 	}
 	if event.Idempotency != nil {
 		s.idempotency[event.Idempotency.Key] = *event.Idempotency

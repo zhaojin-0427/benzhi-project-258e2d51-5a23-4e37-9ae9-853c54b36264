@@ -62,7 +62,14 @@ func (s *Store) Credential(number string) (domain.ReleaseCredential, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c, ok := s.credentials[number]
-	return c, ok
+	if !ok {
+		return c, false
+	}
+	copy, err := cloneJSON(c)
+	if err != nil {
+		return c, true
+	}
+	return copy, true
 }
 
 func (s *Store) Idempotent(key string) (IdempotencyRecord, bool) {
