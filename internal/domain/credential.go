@@ -45,13 +45,7 @@ type CredentialPrecheck struct {
 	FrozenDigest  string            `json:"frozenDigest"`
 }
 
-func (c *SuitabilityCase) CredentialPrecheck() (CredentialPrecheck, error) {
-	if c.State != StateFrozen {
-		return CredentialPrecheck{}, NewError("invalid_state", "仅已冻结档案可进行签发预检")
-	}
-	if c.CurrentInputDigest() != c.FrozenDigest {
-		return CredentialPrecheck{}, NewError("frozen_tampered", "冻结输入摘要不一致")
-	}
+func (c *SuitabilityCase) restrictionsForCredential() []RestrictionTerm {
 	restrictions := []RestrictionTerm{}
 	if c.Trial != nil {
 		for _, f := range c.Trial.RiskFindings {
@@ -66,6 +60,17 @@ func (c *SuitabilityCase) CredentialPrecheck() (CredentialPrecheck, error) {
 			restrictions = append(restrictions, RestrictionTerm{RestrictionID: HashJSON(struct{ Item, Note string }{confirmation.Item, confirmation.Note})[:16], Text: confirmation.Note, Source: "review_note:" + confirmation.Item})
 		}
 	}
+	return restrictions
+}
+
+func (c *SuitabilityCase) CredentialPrecheck() (CredentialPrecheck, error) {
+	if c.State != StateFrozen {
+		return CredentialPrecheck{}, NewError("invalid_state", "仅已冻结档案可进行签发预检")
+	}
+	if c.CurrentInputDigest() != c.FrozenDigest {
+		return CredentialPrecheck{}, NewError("frozen_tampered", "冻结输入摘要不一致")
+	}
+	restrictions := c.restrictionsForCredential()
 	return CredentialPrecheck{CaseID: c.CaseID, CaseVersion: c.Version, Decision: c.Trial.Decision, RequiredScope: UsageScope{ArtifactRef: c.ArtifactRef, RepairArea: c.RepairArea, PaperLotID: c.PaperLotID, ArtifactRefs: []string{c.ArtifactRef}, RepairAreas: []string{c.RepairArea}, PaperLotIDs: []string{c.PaperLotID}}, Restrictions: restrictions, FrozenDigest: c.FrozenDigest}, nil
 }
 
@@ -106,6 +111,9 @@ func (c *SuitabilityCase) Freeze(actor, reason string, expected int, now time.Ti
 	}
 	if len(c.BlockingRiskFindings()) > 0 {
 		return NewError("open_risk_findings", "仍有阻断风险发现")
+	}
+	if c.Trial.Decision == DecisionRestricted && len(c.restrictionsForCredential()) == 0 {
+		return NewError("restriction_missing", "限制使用结论缺少可确认的限制条款")
 	}
 	digest := c.CurrentInputDigest()
 	return c.change("freeze", RoleReviewer, actor, reason, now, func() error {
