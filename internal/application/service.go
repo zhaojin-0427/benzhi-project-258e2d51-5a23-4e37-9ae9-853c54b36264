@@ -77,8 +77,14 @@ func execute[T any](s *Service, ctx Context, operation string, request any, stat
 		}
 		return result, true, nil
 	}
+	if err := contextErr(ctx); err != nil {
+		return zero, false, err
+	}
 	result, commit, err := action()
 	if err != nil {
+		return zero, false, err
+	}
+	if err := contextErr(ctx); err != nil {
 		return zero, false, err
 	}
 	body, err := json.Marshal(result)
@@ -95,12 +101,17 @@ func execute[T any](s *Service, ctx Context, operation string, request any, stat
 		}
 		return zero, false, err
 	}
-	if ctx.RequestContext != nil {
-		select {
-		case <-ctx.RequestContext.Done():
-			return zero, false, ctx.RequestContext.Err()
-		default:
-		}
-	}
 	return result, false, nil
+}
+
+func contextErr(ctx Context) error {
+	if ctx.RequestContext == nil {
+		return nil
+	}
+	select {
+	case <-ctx.RequestContext.Done():
+		return ctx.RequestContext.Err()
+	default:
+		return nil
+	}
 }
