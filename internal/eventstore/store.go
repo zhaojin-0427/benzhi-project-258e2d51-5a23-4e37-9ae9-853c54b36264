@@ -52,6 +52,14 @@ func Open(directory string) (*Store, error) {
 		if report.EventCount == s.sequence && report.LastHash != s.lastHash {
 			return nil, errors.New("投影快照与事件账本锚点不一致")
 		}
+		if report.EventCount > s.sequence {
+			if err := s.replay(); err != nil {
+				return nil, err
+			}
+			if s.sequence != report.EventCount || s.lastHash != report.LastHash {
+				return nil, errors.New("尾部事件重放后锚点与事件账本不一致")
+			}
+		}
 	} else {
 		if err := s.replay(); err != nil {
 			return nil, err
@@ -132,6 +140,9 @@ func (s *Store) replay() error {
 		var event Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			return fmt.Errorf("事件账本第 %d 行无效: %w", line, err)
+		}
+		if event.Sequence <= s.sequence {
+			continue
 		}
 		if err := s.validateNextEvent(event); err != nil {
 			return fmt.Errorf("事件账本第 %d 行: %w", line, err)
