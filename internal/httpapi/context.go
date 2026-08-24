@@ -34,7 +34,12 @@ func commandContext(r *http.Request) (application.Context, error) {
 	if actor == "" || role == "" {
 		return application.Context{}, domain.NewError("unauthorized", "必须提供 X-Actor 和 X-Role")
 	}
-	return application.Context{Actor: actor, Role: role, IdempotencyKey: r.Header.Get("Idempotency-Key")}, nil
+	return application.Context{
+		Actor:          actor,
+		Role:           role,
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+		RequestContext: r.Context(),
+	}, nil
 }
 
 func withRequestID(r *http.Request) *http.Request {

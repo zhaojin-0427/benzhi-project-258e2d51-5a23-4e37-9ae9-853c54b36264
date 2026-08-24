@@ -95,5 +95,12 @@ func execute[T any](s *Service, ctx Context, operation string, request any, stat
 		}
 		return zero, false, err
 	}
+	if ctx.RequestContext != nil {
+		select {
+		case <-ctx.RequestContext.Done():
+			return zero, false, ctx.RequestContext.Err()
+		default:
+		}
+	}
 	return result, false, nil
 }

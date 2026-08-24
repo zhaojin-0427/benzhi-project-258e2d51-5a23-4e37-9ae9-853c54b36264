@@ -1,11 +1,16 @@
 package application
 
-import "paperfit-release/internal/domain"
+import (
+	"context"
+
+	"paperfit-release/internal/domain"
+)
 
 type Context struct {
 	Actor          string
 	Role           domain.Role
 	IdempotencyKey string
+	RequestContext context.Context
 }
 
 type CreateCaseRequest struct {
