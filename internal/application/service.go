@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"paperfit-release/internal/domain"
@@ -14,16 +15,18 @@ import (
 type Clock func() time.Time
 
 type Service struct {
-	store *eventstore.Store
-	now   Clock
+	store       *eventstore.Store
+	now         Clock
+	caseCacheMu sync.RWMutex
+	caseCache   map[string]json.RawMessage
 }
 
 func NewService(store *eventstore.Store) *Service {
-	return &Service{store: store, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{store: store, now: func() time.Time { return time.Now().UTC() }, caseCache: map[string]json.RawMessage{}}
 }
 
 func NewServiceWithClock(store *eventstore.Store, clock Clock) *Service {
-	return &Service{store: store, now: clock}
+	return &Service{store: store, now: clock, caseCache: map[string]json.RawMessage{}}
 }
 
 func randomID(prefix string) string {

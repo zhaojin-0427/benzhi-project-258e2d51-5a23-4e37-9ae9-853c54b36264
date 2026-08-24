@@ -1,6 +1,10 @@
 package application
 
-import "paperfit-release/internal/domain"
+import (
+	"encoding/json"
+
+	"paperfit-release/internal/domain"
+)
 
 type CaseView struct {
 	Case                *domain.SuitabilityCase  `json:"case"`
@@ -11,11 +15,26 @@ type CaseView struct {
 }
 
 func (s *Service) Case(id string) (CaseView, error) {
+	s.caseCacheMu.RLock()
+	cached := append(json.RawMessage(nil), s.caseCache[id]...)
+	s.caseCacheMu.RUnlock()
+	if len(cached) > 0 {
+		var view CaseView
+		if err := json.Unmarshal(cached, &view); err == nil {
+			return view, nil
+		}
+	}
 	c, err := s.load(id)
 	if err != nil {
 		return CaseView{}, err
 	}
-	return CaseView{Case: c, MissingMeasurements: c.MissingMeasurements(), DetectionProgress: c.DetectionProgress(), OpenBlockingIssues: c.OpenBlockingIssues(), RiskStatus: c.RiskStatus()}, nil
+	view := CaseView{Case: c, MissingMeasurements: c.MissingMeasurements(), DetectionProgress: c.DetectionProgress(), OpenBlockingIssues: c.OpenBlockingIssues(), RiskStatus: c.RiskStatus()}
+	if encoded, marshalErr := json.Marshal(view); marshalErr == nil {
+		s.caseCacheMu.Lock()
+		s.caseCache[id] = append(json.RawMessage(nil), encoded...)
+		s.caseCacheMu.Unlock()
+	}
+	return view, nil
 }
 
 func (s *Service) FindCases(caseNumber, paperLotID string) []*domain.SuitabilityCase {
