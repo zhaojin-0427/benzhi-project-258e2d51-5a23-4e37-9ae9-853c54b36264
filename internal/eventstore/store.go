@@ -20,6 +20,7 @@ type Store struct {
 	directory    string
 	ledgerPath   string
 	snapshotPath string
+	ledgerFile   *os.File
 	sequence     uint64
 	lastHash     string
 	cases        map[string]*domain.SuitabilityCase
@@ -43,7 +44,13 @@ func Open(directory string) (*Store, error) {
 	if err := s.replay(); err != nil {
 		return nil, err
 	}
+	ledgerFile, err := os.OpenFile(s.ledgerPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
+	if err != nil {
+		return nil, fmt.Errorf("打开事件账本: %w", err)
+	}
+	s.ledgerFile = ledgerFile
 	if err := s.writeSnapshotLocked(); err != nil {
+		_ = ledgerFile.Close()
 		return nil, err
 	}
 	return s, nil
@@ -210,19 +217,11 @@ func (s *Store) Commit(request CommitRequest) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(s.ledgerPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
-	if err != nil {
-		return fmt.Errorf("打开事件账本: %w", err)
+	if _, err = s.ledgerFile.Write(append(line, '\n')); err == nil {
+		err = s.ledgerFile.Sync()
 	}
-	if _, err = file.Write(append(line, '\n')); err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
 	if err != nil {
 		return fmt.Errorf("追加事件账本: %w", err)
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	if err := s.applyEvent(event); err != nil {
 		return err
