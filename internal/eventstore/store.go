@@ -37,11 +37,25 @@ func Open(directory string) (*Store, error) {
 		return nil, fmt.Errorf("创建数据目录: %w", err)
 	}
 	s := &Store{directory: directory, ledgerPath: filepath.Join(directory, "events.jsonl"), snapshotPath: filepath.Join(directory, "projection.json"), cases: map[string]*domain.SuitabilityCase{}, caseNumbers: map[string]string{}, lotCases: map[string][]string{}, credentials: map[string]domain.ReleaseCredential{}, idempotency: map[string]IdempotencyRecord{}}
-	if err := s.validateSnapshotSchema(); err != nil {
+	restored, err := s.restoreSnapshot()
+	if err != nil {
 		return nil, err
 	}
-	if err := s.replay(); err != nil {
-		return nil, err
+	if restored {
+		report, verifyErr := VerifyLedger(s.ledgerPath)
+		if verifyErr != nil {
+			return nil, fmt.Errorf("校验事件账本: %w", verifyErr)
+		}
+		if report.EventCount < s.sequence {
+			return nil, errors.New("投影快照领先于事件账本")
+		}
+		if report.EventCount == s.sequence && report.LastHash != s.lastHash {
+			return nil, errors.New("投影快照与事件账本锚点不一致")
+		}
+	} else {
+		if err := s.replay(); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.writeSnapshotLocked(); err != nil {
 		return nil, err
@@ -49,33 +63,56 @@ func Open(directory string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) validateSnapshotSchema() error {
+func (s *Store) restoreSnapshot() (bool, error) {
 	f, err := os.Open(s.snapshotPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("打开投影快照: %w", err)
+		return false, fmt.Errorf("打开投影快照: %w", err)
 	}
 	defer f.Close()
 	var snapshot Snapshot
 	if err := json.NewDecoder(io.LimitReader(f, 128<<20)).Decode(&snapshot); err != nil {
-		return fmt.Errorf("解析投影快照: %w", err)
+		return false, fmt.Errorf("解析投影快照: %w", err)
 	}
 	if snapshot.SchemaVersion != SchemaVersion {
-		return fmt.Errorf("不支持的快照 schemaVersion: %d", snapshot.SchemaVersion)
+		return false, fmt.Errorf("不支持的快照 schemaVersion: %d", snapshot.SchemaVersion)
 	}
 	if snapshot.ProjectionHash == "" {
-		return errors.New("投影快照缺少 projectionHash")
+		return false, errors.New("投影快照缺少 projectionHash")
 	}
 	calculated, err := snapshotHash(snapshot)
 	if err != nil {
-		return fmt.Errorf("计算投影快照哈希: %w", err)
+		return false, fmt.Errorf("计算投影快照哈希: %w", err)
 	}
 	if calculated != snapshot.ProjectionHash {
-		return errors.New("投影快照内容哈希不匹配")
+		return false, errors.New("投影快照内容哈希不匹配")
 	}
-	return nil
+	for id, c := range snapshot.Cases {
+		if c == nil || c.CaseID != id {
+			return false, fmt.Errorf("投影快照档案 %s 的标识无效", id)
+		}
+		if err := c.ValidateInvariant(); err != nil {
+			return false, fmt.Errorf("投影快照档案 %s 不满足聚合不变量: %w", id, err)
+		}
+	}
+	s.sequence = snapshot.LastSequence
+	s.lastHash = snapshot.LastHash
+	s.cases = snapshot.Cases
+	s.credentials = snapshot.Credentials
+	s.idempotency = snapshot.Idempotency
+	if s.cases == nil {
+		s.cases = map[string]*domain.SuitabilityCase{}
+	}
+	if s.credentials == nil {
+		s.credentials = map[string]domain.ReleaseCredential{}
+	}
+	if s.idempotency == nil {
+		s.idempotency = map[string]IdempotencyRecord{}
+	}
+	s.rebuildIndexes()
+	return true, nil
 }
 
 func (s *Store) replay() error {
