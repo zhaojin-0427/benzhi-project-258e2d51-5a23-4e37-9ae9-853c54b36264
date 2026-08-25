@@ -174,6 +174,18 @@ func (s *Store) Commit(request CommitRequest) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previousSequence, previousHash := s.sequence, s.lastHash
+	previousCase, hadPreviousCase := s.cases[request.Case.CaseID]
+	var previousCredential domain.ReleaseCredential
+	hadPreviousCredential := false
+	if request.Credential != nil {
+		previousCredential, hadPreviousCredential = s.credentials[request.Credential.CredentialNumber]
+	}
+	var previousIdempotency IdempotencyRecord
+	hadPreviousIdempotency := false
+	if request.Idempotency != nil {
+		previousIdempotency, hadPreviousIdempotency = s.idempotency[request.Idempotency.Key]
+	}
 	if request.Idempotency != nil {
 		if existing, exists := s.idempotency[request.Idempotency.Key]; exists {
 			if existing.Operation == request.Idempotency.Operation && existing.Fingerprint == request.Idempotency.Fingerprint {
@@ -229,6 +241,27 @@ func (s *Store) Commit(request CommitRequest) error {
 	}
 	s.sequence, s.lastHash = event.Sequence, event.Hash
 	if err := s.writeSnapshotLocked(); err != nil {
+		if hadPreviousCase {
+			s.cases[request.Case.CaseID] = previousCase
+		} else {
+			delete(s.cases, request.Case.CaseID)
+		}
+		if request.Credential != nil {
+			if hadPreviousCredential {
+				s.credentials[request.Credential.CredentialNumber] = previousCredential
+			} else {
+				delete(s.credentials, request.Credential.CredentialNumber)
+			}
+		}
+		if request.Idempotency != nil {
+			if hadPreviousIdempotency {
+				s.idempotency[request.Idempotency.Key] = previousIdempotency
+			} else {
+				delete(s.idempotency, request.Idempotency.Key)
+			}
+		}
+		s.sequence, s.lastHash = previousSequence, previousHash
+		s.rebuildIndexes()
 		return fmt.Errorf("更新投影快照: %w", err)
 	}
 	return nil
