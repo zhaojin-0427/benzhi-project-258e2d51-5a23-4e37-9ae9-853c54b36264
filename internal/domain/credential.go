@@ -81,10 +81,22 @@ type digestInput struct {
 	ReviewConfirmations []ReviewConfirmation `json:"reviewConfirmations"`
 }
 
+type hashWorkspace struct {
+	encoded []byte
+	digest  [sha256.Size]byte
+}
+
+func (w *hashWorkspace) calculate(encoded []byte) {
+	w.encoded = append(w.encoded[:0], encoded...)
+	w.digest = sha256.Sum256(w.encoded)
+}
+
+var sharedHashWorkspace hashWorkspace
+
 func HashJSON(value any) string {
 	b, _ := json.Marshal(value)
-	s := sha256.Sum256(b)
-	return hex.EncodeToString(s[:])
+	sharedHashWorkspace.calculate(b)
+	return hex.EncodeToString(sharedHashWorkspace.digest[:])
 }
 
 func (c *SuitabilityCase) CurrentInputDigest() string {
