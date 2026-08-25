@@ -143,26 +143,26 @@ func (s *Store) applyEvent(event Event) error {
 		return err
 	}
 	s.cases[c.CaseID] = copyCase
+	s.caseNumbers[c.CaseNumber] = c.CaseID
+	lotIDs := s.lotCases[c.PaperLotID]
+	found := false
+	for _, id := range lotIDs {
+		if id == c.CaseID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.lotCases[c.PaperLotID] = append(lotIDs, c.CaseID)
+		sort.Strings(s.lotCases[c.PaperLotID])
+	}
 	if event.Credential != nil {
 		s.credentials[event.Credential.CredentialNumber] = *event.Credential
 	}
 	if event.Idempotency != nil {
 		s.idempotency[event.Idempotency.Key] = *event.Idempotency
 	}
-	s.rebuildIndexes()
 	return nil
-}
-
-func (s *Store) rebuildIndexes() {
-	s.caseNumbers = map[string]string{}
-	s.lotCases = map[string][]string{}
-	for id, c := range s.cases {
-		s.caseNumbers[c.CaseNumber] = id
-		s.lotCases[c.PaperLotID] = append(s.lotCases[c.PaperLotID], id)
-	}
-	for lot := range s.lotCases {
-		sort.Strings(s.lotCases[lot])
-	}
 }
 
 func (s *Store) Commit(request CommitRequest) error {
