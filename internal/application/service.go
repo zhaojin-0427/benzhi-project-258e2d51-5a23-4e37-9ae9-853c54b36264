@@ -93,7 +93,7 @@ func execute[T any](s *Service, ctx Context, operation string, request any, stat
 				return stable, true, nil
 			}
 		}
-		return zero, false, err
+		return zero, false, fmt.Errorf("%s 提交失败: %w", operation, err)
 	}
 	return result, false, nil
 }
